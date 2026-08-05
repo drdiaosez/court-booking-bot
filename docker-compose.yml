@@ -1,0 +1,28 @@
+version: "3.9"
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: courtbot
+      POSTGRES_PASSWORD: courtbot
+      POSTGRES_DB: courtbot
+    volumes:
+      - courtbot_pg_data:/var/lib/postgresql/data
+
+  app:
+    build: .
+    restart: unless-stopped
+    depends_on:
+      - db
+    env_file:
+      - .env
+    ports:
+      - "8000:8000"
+    volumes:
+      - courtbot_screenshots:/app/data/screenshots
+
+volumes:
+  courtbot_pg_data:
+  courtbot_screenshots:

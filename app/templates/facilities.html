@@ -1,0 +1,86 @@
+{% extends "base.html" %}
+{% block title %}Facilities{% endblock %}
+{% block content %}
+<h2 class="mb-3">Facilities</h2>
+<p class="text-muted">A facility is a real club/venue. Add one per venue you want to book at &mdash; even if
+  several facilities all run on the same platform (e.g. CourtReserve), each gets its own row here because
+  each has its own portal id and booking window.</p>
+
+<div class="card">
+  <div class="card-body">
+    <h5 class="card-title">Add a facility</h5>
+    <form id="facility-form" class="row g-3">
+      <div class="col-md-6">
+        <label class="form-label">Name</label>
+        <input class="form-control" name="name" placeholder="Cali Smash" required>
+      </div>
+      <div class="col-md-6">
+        <label class="form-label">Platform</label>
+        <select class="form-select" name="platform">
+          <option value="courtreserve" selected>CourtReserve</option>
+          <option value="generic">Generic (adapter not yet implemented)</option>
+        </select>
+      </div>
+      <div class="col-md-8">
+        <label class="form-label">Base URL</label>
+        <input class="form-control" name="base_url" placeholder="https://app.courtreserve.com" required>
+      </div>
+      <div class="col-md-4">
+        <label class="form-label">Portal ID</label>
+        <input class="form-control" name="portal_id" placeholder="16314">
+      </div>
+      <div class="col-md-4">
+        <label class="form-label">Timezone (IANA)</label>
+        <input class="form-control" name="timezone" value="America/Los_Angeles" required>
+      </div>
+      <div class="col-md-4">
+        <label class="form-label">Booking window (days in advance)</label>
+        <input type="number" class="form-control" name="booking_window_days" value="7" required>
+      </div>
+      <div class="col-md-4 d-flex align-items-end">
+        <button type="submit" class="btn btn-primary w-100">Add facility</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<div id="facility-list"></div>
+{% endblock %}
+{% block scripts %}
+<script>
+async function loadFacilities() {
+  const facilities = await apiFetch('/api/facilities');
+  const container = document.getElementById('facility-list');
+  container.innerHTML = facilities.map(f => `
+    <div class="card">
+      <div class="card-body">
+        <h5 class="card-title">${f.name}</h5>
+        <p class="card-text mb-1"><strong>Platform:</strong> ${f.platform}</p>
+        <p class="card-text mb-1"><strong>URL:</strong> ${f.base_url} ${f.portal_id ? '(portal ' + f.portal_id + ')' : ''}</p>
+        <p class="card-text mb-1"><strong>Timezone:</strong> ${f.timezone} &nbsp; <strong>Books:</strong> ${f.booking_window_days} days ahead</p>
+      </div>
+    </div>
+  `).join('') || '<p class="text-muted">No facilities yet.</p>';
+}
+
+document.getElementById('facility-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const form = new FormData(e.target);
+  const payload = {
+    name: form.get('name'),
+    platform: form.get('platform'),
+    base_url: form.get('base_url'),
+    portal_id: form.get('portal_id') || null,
+    timezone: form.get('timezone'),
+    booking_window_days: parseInt(form.get('booking_window_days'), 10),
+  };
+  await apiFetch('/api/facilities', { method: 'POST', body: JSON.stringify(payload) });
+  e.target.reset();
+  document.querySelector('[name=timezone]').value = 'America/Los_Angeles';
+  document.querySelector('[name=booking_window_days]').value = 7;
+  loadFacilities();
+});
+
+loadFacilities();
+</script>
+{% endblock %}

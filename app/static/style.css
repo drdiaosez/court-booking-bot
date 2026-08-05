@@ -1,0 +1,4 @@
+body { background: #f7f7f9; }
+.card { margin-bottom: 1rem; }
+.status-badge { text-transform: capitalize; }
+pre.log-line { white-space: pre-wrap; margin: 0; padding: 4px 8px; border-bottom: 1px solid #eee; font-size: 0.85rem; }

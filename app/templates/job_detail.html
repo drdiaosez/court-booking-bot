@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+{% block title %}Job detail{% endblock %}
+{% block content %}
+<div id="job-detail"></div>
+<h5 class="mt-4">Log</h5>
+<div id="job-logs" class="card"><div class="card-body p-0"></div></div>
+{% endblock %}
+{% block scripts %}
+<script>
+const jobId = {{ job_id }};
+
+async function loadJob() {
+  const job = await apiFetch(`/api/jobs/${jobId}`);
+  document.getElementById('job-detail').innerHTML = `
+    <div class="d-flex justify-content-between align-items-start">
+      <div>
+        <h2>${job.facility}</h2>
+        <p class="mb-1">${job.target_date} &nbsp; ${job.start_time}&ndash;${job.end_time} ${job.court_preference ? '(' + job.court_preference + ')' : ''}</p>
+        <p class="mb-1 text-muted">Booking window opens ${new Date(job.run_at + 'Z').toLocaleString()}</p>
+        ${job.dry_run ? '<span class="badge bg-warning text-dark">DRY RUN</span>' : ''}
+      </div>
+      <div class="text-end">
+        <span class="badge bg-secondary status-badge fs-6">${job.status}</span>
+        <p class="mb-0 small text-muted">Attempts: ${job.attempts}</p>
+        ${job.status === 'scheduled' ? '<button class="btn btn-sm btn-outline-danger mt-2" onclick="cancelJob()">Cancel</button>' : ''}
+      </div>
+    </div>
+    ${job.result_note ? `<div class="alert alert-success mt-3">${job.result_note}</div>` : ''}
+    ${job.last_error ? `<div class="alert alert-danger mt-3">${job.last_error}</div>` : ''}
+  `;
+  document.querySelector('#job-logs .card-body').innerHTML = job.logs.map(l => `
+    <pre class="log-line">[${new Date(l.timestamp + 'Z').toLocaleTimeString()}] ${l.level.toUpperCase()}: ${l.message}${l.screenshot_path ? ' (screenshot: ' + l.screenshot_path + ')' : ''}</pre>
+  `).join('') || '<p class="text-muted p-3 mb-0">No log entries yet -- this job hasn\'t started running.</p>';
+}
+
+async function cancelJob() {
+  await apiFetch(`/api/jobs/${jobId}/cancel`, { method: 'POST' });
+  loadJob();
+}
+
+loadJob();
+setInterval(loadJob, 5000);
+</script>
+{% endblock %}

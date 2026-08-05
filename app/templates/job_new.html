@@ -1,0 +1,86 @@
+{% extends "base.html" %}
+{% block title %}New Booking Job{% endblock %}
+{% block content %}
+<h2 class="mb-3">New booking job</h2>
+<div id="error" class="alert alert-danger d-none"></div>
+<div id="no-creds" class="alert alert-warning d-none">
+  You need a saved facility and login before creating a job. <a href="/facilities">Add a facility</a>
+  then <a href="/credentials">save your login</a>.
+</div>
+<form id="job-form" class="row g-3">
+  <div class="col-md-6">
+    <label class="form-label">Facility / login</label>
+    <select class="form-select" name="credential_id" id="cred-select" required></select>
+  </div>
+  <div class="col-md-6">
+    <label class="form-label">Court preference (optional)</label>
+    <input class="form-control" name="court_preference" placeholder="Court 3, or leave blank for any">
+  </div>
+  <div class="col-md-4">
+    <label class="form-label">Date you want to play</label>
+    <input type="date" class="form-control" name="target_date" required>
+  </div>
+  <div class="col-md-4">
+    <label class="form-label">Start time</label>
+    <input type="time" class="form-control" name="start_time" required>
+  </div>
+  <div class="col-md-4">
+    <label class="form-label">End time</label>
+    <input type="time" class="form-control" name="end_time" required>
+  </div>
+  <div class="col-md-6">
+    <label class="form-label">Override advance-booking days (optional)</label>
+    <input type="number" class="form-control" name="advance_days_override" placeholder="Defaults to the facility's setting">
+  </div>
+  <div class="col-md-6 d-flex align-items-end">
+    <div class="form-check">
+      <input class="form-check-input" type="checkbox" name="dry_run" id="dry_run">
+      <label class="form-check-label" for="dry_run">
+        Dry run (log in, navigate, find the slot, stop before actually confirming a booking)
+      </label>
+    </div>
+  </div>
+  <div class="col-12">
+    <button type="submit" class="btn btn-primary">Schedule job</button>
+  </div>
+</form>
+{% endblock %}
+{% block scripts %}
+<script>
+let credentials = [];
+
+async function loadCreds() {
+  credentials = await apiFetch('/api/credentials');
+  const select = document.getElementById('cred-select');
+  select.innerHTML = credentials.map(c => `<option value="${c.id}" data-facility="${c.facility_id}">${c.facility_name} (${c.username})</option>`).join('');
+  document.getElementById('no-creds').classList.toggle('d-none', credentials.length > 0);
+}
+
+document.getElementById('job-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const form = new FormData(e.target);
+  const credId = parseInt(form.get('credential_id'), 10);
+  const cred = credentials.find(c => c.id === credId);
+  const payload = {
+    facility_id: cred.facility_id,
+    credential_id: credId,
+    target_date: form.get('target_date'),
+    start_time: form.get('start_time'),
+    end_time: form.get('end_time'),
+    court_preference: form.get('court_preference') || null,
+    advance_days_override: form.get('advance_days_override') ? parseInt(form.get('advance_days_override'), 10) : null,
+    dry_run: form.get('dry_run') === 'on',
+  };
+  try {
+    const job = await apiFetch('/api/jobs', { method: 'POST', body: JSON.stringify(payload) });
+    window.location.href = `/jobs/${job.id}`;
+  } catch (err) {
+    const el = document.getElementById('error');
+    el.textContent = err.message;
+    el.classList.remove('d-none');
+  }
+});
+
+loadCreds();
+</script>
+{% endblock %}
