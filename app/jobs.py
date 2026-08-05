@@ -62,7 +62,9 @@ def create_job(payload: JobIn, db: Session = Depends(get_db), user: User = Depen
     if not credential or credential.user_id != user.id or credential.facility_id != facility.id:
         raise HTTPException(status_code=404, detail="Credential not found for this user/facility")
 
-    advance_days = payload.advance_days_override or facility.booking_window_days
+    advance_days = (
+        payload.advance_days_override if payload.advance_days_override is not None else facility.booking_window_days
+    )
     run_at = compute_run_at(payload.target_date, facility.timezone, advance_days)
 
     if run_at < datetime.utcnow():
