@@ -101,11 +101,40 @@ if you're exposing it to the internet -- session cookies are not marked `Secure`
 default for local dev; set that up before exposing this publicly with real
 credentials in play).
 
+## Preventing a stuck job from taking down the whole server
+
+Headless Chromium can use several hundred MB. On a small droplet already running other
+services, a stuck browser launch can exhaust memory badly enough to freeze the entire
+box, not just this app. Two layers of defense:
+
+1. **Code-level (`app/worker.py`):** browser launch, login, and navigation are all wrapped
+   in timeouts (`LAUNCH_TIMEOUT_SECONDS`, `LOGIN_TIMEOUT_SECONDS`, `NAVIGATE_TIMEOUT_SECONDS`),
+   and the browser is always closed in a `finally` block. A hung step now fails the job
+   cleanly instead of hanging forever. `restore_pending_jobs()` also only auto-resumes jobs
+   that never started (`scheduled`); a job that was mid-attempt (`prewarming`/`running`) when
+   the process died is marked failed rather than blindly retried on every restart.
+2. **Infrastructure-level (systemd cgroup limit):** add a hard memory ceiling to the unit so
+   the kernel kills *this service* if it goes over, instead of the whole system thrashing
+   into unresponsiveness. Edit `/etc/systemd/system/court-booking-bot.service` and add under
+   `[Service]`:
+   ```ini
+   MemoryMax=768M
+   MemoryHigh=512M
+   ```
+   Then `sudo systemctl daemon-reload && sudo systemctl restart court-booking-bot`. Tune the
+   numbers to your droplet's actual free RAM (leave headroom for whatever else runs on the
+   same box). If Chromium actually needs more than this ceiling to run at all, that's a sign
+   the droplet itself is undersized for running a real browser -- add swap or resize rather
+   than raising the limit indefinitely.
+
 ## Known limitations / good next steps
 
 - Single process handles both the web UI and the scheduler; fine for a hobby project,
-  but a crash restarts both. `restore_pending_jobs()` re-arms scheduled jobs on boot.
+  but a crash restarts both.
 - No email/SMS notification on job success/failure yet -- check the job detail page.
 - No UI for editing `Facility.adapter_config` yet; edit it directly in the database.
 - The CourtReserve selectors need the calibration pass described above before your
   first real (non-dry-run) job.
+- Only one job runs at a time in-process right now -- if you end up scheduling many
+  concurrent jobs across facilities, consider capping concurrency explicitly rather than
+  relying on the timeouts above as the only guard rail.

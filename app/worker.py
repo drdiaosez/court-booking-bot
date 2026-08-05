@@ -27,6 +27,14 @@ settings = get_settings()
 POST_OPEN_GRACE_SECONDS = 25
 RETRY_INTERVAL_SECONDS = 1.0
 
+# Hard ceilings so a stuck browser launch/login/navigation fails loudly and frees whatever
+# it was holding, instead of hanging the job (and the process it spawned) forever. This is
+# what was missing the first time this was written -- a launch that never returns used to
+# just sit there consuming memory indefinitely with nothing to time it out.
+LAUNCH_TIMEOUT_SECONDS = 30
+LOGIN_TIMEOUT_SECONDS = 45
+NAVIGATE_TIMEOUT_SECONDS = 45
+
 
 def _add_log(db: Session, job: BookingJob, level: str, message: str, screenshot_path: str | None) -> None:
     db.add(JobLog(job_id=job.id, level=level, message=message, screenshot_path=screenshot_path))
@@ -71,66 +79,94 @@ async def execute_job(job_id: int, session_factory) -> None:
         adapter_cls = get_adapter_class(facility.platform)
 
         async with async_playwright() as pw:
-            browser = await pw.chromium.launch(headless=settings.playwright_headless)
-            context = await browser.new_context()
-            page = await context.new_page()
-            adapter = adapter_cls(request, page, context, browser)
-
+            browser = None
             try:
-                await adapter.login()
-                await adapter.navigate_to_booking_calendar()
-            except BookingError as exc:
-                job.status = JobStatus.FAILED
-                job.last_error = str(exc)
-                db.commit()
-                await browser.close()
-                return
-
-            # Spin-wait for the exact run_at instant (stored as UTC).
-            run_at_utc = job.run_at.replace(tzinfo=timezone.utc) if job.run_at.tzinfo is None else job.run_at
-            _add_log(db, job, "info", f"Pre-warmed; waiting until {run_at_utc.isoformat()} to attempt booking", None)
-            while True:
-                now = datetime.now(timezone.utc)
-                remaining = (run_at_utc - now).total_seconds()
-                if remaining <= 0:
-                    break
-                await asyncio.sleep(min(remaining, 0.25))
-
-            job.status = JobStatus.RUNNING
-            db.commit()
-
-            deadline = time_module.monotonic() + POST_OPEN_GRACE_SECONDS
-            last_error: str | None = None
-            success = False
-            while time_module.monotonic() < deadline and job.attempts < job.max_attempts:
-                job.attempts += 1
-                db.commit()
                 try:
-                    bookable = await adapter.slot_is_bookable()
-                    if not bookable:
-                        last_error = "Slot not yet bookable (booking window may not be open yet)."
-                        await asyncio.sleep(RETRY_INTERVAL_SECONDS)
-                        continue
-                    result = await adapter.book_slot()
-                    job.status = JobStatus.SUCCESS
-                    job.result_note = result
+                    browser = await asyncio.wait_for(
+                        pw.chromium.launch(headless=settings.playwright_headless),
+                        timeout=LAUNCH_TIMEOUT_SECONDS,
+                    )
+                except asyncio.TimeoutError:
+                    job.status = JobStatus.FAILED
+                    job.last_error = (
+                        f"Browser launch did not return within {LAUNCH_TIMEOUT_SECONDS}s. This usually means "
+                        "the host is out of memory/resources for Chromium (check `free -h` and consider "
+                        "adding swap, resizing the server, or adding a systemd MemoryMax= limit so this "
+                        "fails fast instead of taking the whole box down)."
+                    )
                     db.commit()
-                    _add_log(db, job, "info", result, None)
-                    success = True
-                    break
-                except SlotNotYetAvailable as exc:
-                    last_error = str(exc)
-                    await asyncio.sleep(RETRY_INTERVAL_SECONDS)
-                except BookingError as exc:
-                    last_error = str(exc)
-                    _add_log(db, job, "error", str(exc), None)
-                    await asyncio.sleep(RETRY_INTERVAL_SECONDS)
+                    return
 
-            if not success:
-                job.status = JobStatus.FAILED
-                job.last_error = last_error or "Exhausted retries without a confirmed booking."
+                context = await browser.new_context()
+                page = await context.new_page()
+                adapter = adapter_cls(request, page, context, browser)
+
+                try:
+                    await asyncio.wait_for(adapter.login(), timeout=LOGIN_TIMEOUT_SECONDS)
+                    await asyncio.wait_for(adapter.navigate_to_booking_calendar(), timeout=NAVIGATE_TIMEOUT_SECONDS)
+                except asyncio.TimeoutError:
+                    job.status = JobStatus.FAILED
+                    job.last_error = "Login or navigation timed out -- the facility site may be slow, unreachable, or the selectors are stuck waiting on something that never appears."
+                    db.commit()
+                    return
+                except BookingError as exc:
+                    job.status = JobStatus.FAILED
+                    job.last_error = str(exc)
+                    db.commit()
+                    return
+
+                # Spin-wait for the exact run_at instant (stored as UTC).
+                run_at_utc = job.run_at.replace(tzinfo=timezone.utc) if job.run_at.tzinfo is None else job.run_at
+                _add_log(db, job, "info", f"Pre-warmed; waiting until {run_at_utc.isoformat()} to attempt booking", None)
+                while True:
+                    now = datetime.now(timezone.utc)
+                    remaining = (run_at_utc - now).total_seconds()
+                    if remaining <= 0:
+                        break
+                    await asyncio.sleep(min(remaining, 0.25))
+
+                job.status = JobStatus.RUNNING
                 db.commit()
 
-            await browser.close()
+                deadline = time_module.monotonic() + POST_OPEN_GRACE_SECONDS
+                last_error: str | None = None
+                success = False
+                while time_module.monotonic() < deadline and job.attempts < job.max_attempts:
+                    job.attempts += 1
+                    db.commit()
+                    try:
+                        bookable = await adapter.slot_is_bookable()
+                        if not bookable:
+                            last_error = "Slot not yet bookable (booking window may not be open yet)."
+                            await asyncio.sleep(RETRY_INTERVAL_SECONDS)
+                            continue
+                        result = await adapter.book_slot()
+                        job.status = JobStatus.SUCCESS
+                        job.result_note = result
+                        db.commit()
+                        _add_log(db, job, "info", result, None)
+                        success = True
+                        break
+                    except SlotNotYetAvailable as exc:
+                        last_error = str(exc)
+                        await asyncio.sleep(RETRY_INTERVAL_SECONDS)
+                    except BookingError as exc:
+                        last_error = str(exc)
+                        _add_log(db, job, "error", str(exc), None)
+                        await asyncio.sleep(RETRY_INTERVAL_SECONDS)
+
+                if not success:
+                    job.status = JobStatus.FAILED
+                    job.last_error = last_error or "Exhausted retries without a confirmed booking."
+                    db.commit()
+            finally:
+                # Always attempted, even on timeout/exception/early-return above -- this is
+                # the fix for the freeze: a hung job no longer leaves its browser dangling
+                # indefinitely with nothing responsible for cleaning it up.
+                if browser is not None:
+                    try:
+                        await asyncio.wait_for(browser.close(), timeout=10)
+                    except Exception:
+                        pass
     finally:
         db.close()

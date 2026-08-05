@@ -60,20 +60,34 @@ def unschedule_job(job_id: int) -> None:
 
 
 def restore_pending_jobs() -> None:
-    """Called once at startup: re-arm every job that's still scheduled in the DB.
+    """Called once at startup. Two very different cases, handled differently on purpose:
 
-    Needed because APScheduler's in-memory job list doesn't survive a process restart --
-    without this, a job created yesterday would silently never fire after a redeploy.
+    - status == SCHEDULED: this job never actually started (no browser was ever launched).
+      Safe to re-arm automatically -- without this, a job created yesterday would silently
+      never fire after a redeploy.
+    - status in (PREWARMING, RUNNING): the previous process died *mid-attempt*, which means
+      a browser launch/login/navigate was in flight when it went down. We do NOT re-arm
+      these automatically: if whatever killed the process was caused by that in-flight
+      attempt (e.g. a resource-exhaustion crash), blindly resuming it on every restart turns
+      one bad job into a crash loop that can take the whole box down repeatedly. Mark it
+      failed instead and let the user decide whether to retry.
     """
     db = SessionLocal()
     try:
-        pending = db.query(BookingJob).filter(BookingJob.status.in_([JobStatus.SCHEDULED, JobStatus.PREWARMING])).all()
+        interrupted = db.query(BookingJob).filter(BookingJob.status.in_([JobStatus.PREWARMING, JobStatus.RUNNING])).all()
+        for job in interrupted:
+            job.status = JobStatus.FAILED
+            job.last_error = (
+                "Interrupted: the app restarted while this job was mid-attempt (browser launch/login/"
+                "navigate in flight). Not auto-resumed -- create a new job if you want to retry."
+            )
+
+        pending = db.query(BookingJob).filter(BookingJob.status == JobStatus.SCHEDULED).all()
         for job in pending:
             if job.run_at < datetime.utcnow() - timedelta(hours=1):
                 job.status = JobStatus.FAILED
                 job.last_error = "Missed: server was down when the booking window opened."
                 continue
-            job.status = JobStatus.SCHEDULED
             schedule_job(job.id, job.run_at)
         db.commit()
     finally:
