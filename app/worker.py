@@ -78,12 +78,21 @@ async def execute_job(job_id: int, session_factory) -> None:
 
         adapter_cls = get_adapter_class(facility.platform)
 
+        launch_kwargs = {"headless": settings.playwright_headless}
+        if settings.proxy_server:
+            proxy_config = {"server": settings.proxy_server}
+            if settings.proxy_username:
+                proxy_config["username"] = settings.proxy_username
+            if settings.proxy_password:
+                proxy_config["password"] = settings.proxy_password
+            launch_kwargs["proxy"] = proxy_config
+
         async with async_playwright() as pw:
             browser = None
             try:
                 try:
                     browser = await asyncio.wait_for(
-                        pw.chromium.launch(headless=settings.playwright_headless),
+                        pw.chromium.launch(**launch_kwargs),
                         timeout=LAUNCH_TIMEOUT_SECONDS,
                     )
                 except asyncio.TimeoutError:

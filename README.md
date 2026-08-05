@@ -71,6 +71,32 @@ window:
 5. Re-run the dry run until it cleanly reaches "clicked target slot" in the log, then
    let a real job run.
 
+## Datacenter IPs getting blocked
+
+Many sites behind Cloudflare (including CourtReserve, at least for some facilities) block
+requests from hosting-provider IP ranges -- DigitalOcean, AWS, GCP, etc. -- outright,
+regardless of what the browser does. The symptom in a job's log/screenshot is a Cloudflare
+"Sorry, you have been blocked" page instead of the real site, usually surfacing as "Could
+not find login form fields" since the page that loaded isn't the login page at all.
+
+To confirm that's what's happening: open the same URL from your own browser on a normal
+home connection. If it loads fine there but fails from the server, it's an IP-based block,
+not a selector problem, and no amount of selector tuning will fix it.
+
+The fix is to route the browser's traffic through a non-datacenter IP. Set `PROXY_SERVER`
+(and `PROXY_USERNAME`/`PROXY_PASSWORD` if required) in `.env` -- `app/worker.py` passes
+these straight to Playwright's `launch(proxy=...)`, so every browser session goes through
+it. A plain residential proxy pool works but can add latency/jitter right when this tool
+needs to be fastest (winning a booking race the instant a window opens); an **"ISP proxy"**
+(sold by providers like Bright Data, Oxylabs, Rayobyte) is usually a better fit -- the IP is
+registered to a residential ISP rather than a hosting provider (so it isn't flagged the way
+plain VPS IPs are), but the connection itself is datacenter-grade for speed and reliability.
+
+This is still automating around a site's own anti-bot measure -- worth keeping in mind
+alongside the ToS disclaimer at the top of this file, since it's a stronger signal than a
+generic "automation might violate ToS" caveat that this specific site is actively trying to
+prevent exactly this.
+
 ## Running locally (development)
 
 ```bash
