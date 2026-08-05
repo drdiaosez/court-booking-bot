@@ -41,6 +41,7 @@ class JobIn(BaseModel):
     court_preference: str | None = None
     advance_days_override: int | None = None
     dry_run: bool = False
+    instant: bool = False  # skip the scheduled wait entirely and fire (almost) immediately
 
 
 class JobOut(BaseModel):

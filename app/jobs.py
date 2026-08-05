@@ -62,20 +62,27 @@ def create_job(payload: JobIn, db: Session = Depends(get_db), user: User = Depen
     if not credential or credential.user_id != user.id or credential.facility_id != facility.id:
         raise HTTPException(status_code=404, detail="Credential not found for this user/facility")
 
-    advance_days = (
-        payload.advance_days_override if payload.advance_days_override is not None else facility.booking_window_days
-    )
-    run_at = compute_run_at(payload.target_date, facility.timezone, advance_days)
-
-    if run_at < datetime.utcnow():
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                f"Computed booking-window open time {run_at.isoformat()} UTC is already in the "
-                "past for this target date/advance window. Double check the target date and the "
-                "facility's booking_window_days."
-            ),
+    if payload.instant:
+        # Skip the scheduling math entirely -- used for calibrating an adapter against a
+        # facility without waiting for a real booking window (or a contrived date/override
+        # combo) to line up. The worker will still prewarm briefly, then find run_at already
+        # in the past and proceed immediately instead of spin-waiting.
+        run_at = datetime.utcnow()
+    else:
+        advance_days = (
+            payload.advance_days_override if payload.advance_days_override is not None else facility.booking_window_days
         )
+        run_at = compute_run_at(payload.target_date, facility.timezone, advance_days)
+
+        if run_at < datetime.utcnow():
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"Computed booking-window open time {run_at.isoformat()} UTC is already in the "
+                    "past for this target date/advance window. Double check the target date and the "
+                    "facility's booking_window_days, or use Instant Run instead."
+                ),
+            )
 
     job = BookingJob(
         user_id=user.id,
