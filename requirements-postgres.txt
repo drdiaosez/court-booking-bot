@@ -1,0 +1,6 @@
+# Only needed if DATABASE_URL points at Postgres (the docker-compose deployment path).
+# Local dev and the bare-metal/SQLite deployment don't need this at all -- kept separate
+# so `pip install -r requirements.txt` doesn't require Postgres build tools on machines
+# (like a fresh macOS + Python 3.13 setup) that don't have a prebuilt wheel available and
+# would otherwise try to compile psycopg2 from source and fail without pg_config installed.
+psycopg2-binary==2.9.9
